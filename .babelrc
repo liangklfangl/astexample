@@ -1,0 +1,9 @@
+ {"presets": [
+      "es2015",
+      "stage-0"
+    ],
+    "plugins": [
+      ["add-module-exports",{'qiniang':'qinliang'}],
+      ["aa", { "libraryName": "antd" }]
+    ]
+}
