@@ -1,4 +1,4 @@
-####babel-plugin-add-module-export的plugin
+#### babel-plugin-add-module-export的plugin
 ```js
 module.exports = ({types}) => ({
   visitor: {
