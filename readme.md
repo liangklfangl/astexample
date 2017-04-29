@@ -1,4 +1,4 @@
-#### babel-plugin-add-module-export的plugin
+#### 1.babel-plugin-add-module-export的plugin
 下面展示的是如何写一个babel插件
 ```js
 module.exports = ({types}) => ({
@@ -77,7 +77,7 @@ export{ foo as default };
 
 总之：该插件只会处理`export default/export{ foo as default }`这种类型，将它处理为`module.exports=exports.default`，而像如`export { foo, awesome, bar };`  这种类型是不会处理的,他会`原样保存到源码中`!
 
-#### 下面是babel-plugin-import的plugin源码
+#### 2.下面是babel-plugin-import的plugin源码
 ```js
 import assert from 'assert';
 import Plugin from './Plugin';
@@ -285,7 +285,7 @@ export default class Plugin {
     return id;
   }
 ```
-#### babel-plugin-check-es2015-constants
+#### 3.babel-plugin-check-es2015-constants
 ```js
 export default function ({ messages }) {
   return {
@@ -307,7 +307,8 @@ export default function ({ messages }) {
   };
 }
 ```
-#### 如何将一段代码转化为一个函数返回
+#### 4.操作AST实现效果
+##### 4.1通过babel.transform将代码直接转化为函数字符串放到html模版中
 下面我们给出要转化的代码:
 ```js
 const code = `
@@ -515,11 +516,170 @@ function requireGenerator(varName, moduleName) {
 <pre>
   input string -> babylon parser -> AST -> transformer[s] -> AST -> babel-generator -> output string
 </pre>
-通过babel-generator我们最后得到依然是string，只是最后我们还需要通过babel处理来真正转化为代码~~
+通过babel-generator我们最后得到`依然是string`。其作用也很明显[点击这里](https://github.com/liangklfangl/astexample/blob/master/test/nunjuck.js),即通过操作AST将代码转化为一个函数，并结合nunjucks将该函数放在html模板中，从而可以直接调用，实现预览效果~~~
 
+##### 4.2结合webpack的loader操作AST得到真正的函数封装到对象上
+下面是个webpack的loader内容:
+```js
+'use strict';
+const loaderUtils = require('loader-utils');
+const generator = require('babel-generator').default;
+const transformer = require('./transformer');
+ const fs = require('fs');
+//前一个loader虽然通过module.exports={}导出，但是这里content仍然会是内容，这一点一定要注意，因为loader只会为Buffer或者string而不会是对象
+module.exports = function jsonmlReactLoader(content) {
+  if (this.cacheable) {
+    this.cacheable();
+  }
+  const query = loaderUtils.getOptions(this);
+  const lang = query.lang || 'react-example';
+  //we get configured language in dora-plugin-preview
+  const res = transformer(content, lang);
+  //we input jsonml as content to tranformer function
+  const inputAst = res.inputAst;
+  const imports = res.imports;
+  for (let k = 0; k < imports.length; k++) {
+    inputAst.program.body.unshift(imports[k]);
+  }
+  const code = generator(inputAst, null, content).code;
+  //Turns an AST into code.
+  const noreact = query.noreact;
+  //You can pass noreact to refuse to import react
+  if (noreact) {
+    return code;
+  }
+ const processedCode= 'const React =  require(\'react\');\n' +
+        'const ReactDOM = require(\'react-dom\');\n'+
+        code;
+  return processedCode;
+};
+```
+我们看看transformer做了什么处理:
+```js
+'use strict';
+const babylon = require('babylon');
+const types = require('babel-types');
+const traverse = require('babel-traverse').default;
+function parser(content) {
+  return babylon.parse(content, {
+    sourceType: 'module',
+    //sourceType: Indicate the mode the code should be parsed in.
+    // Can be either "script" or "module".
+    plugins: [
+      'jsx',
+      'flow',
+      'asyncFunctions',
+      'classConstructorCall',
+      'doExpressions',
+      'trailingFunctionCommas',
+      'objectRestSpread',
+      'decorators',
+      'classProperties',
+      'exportExtensions',
+      'exponentiationOperator',
+      'asyncGenerators',
+      'functionBind',
+      'functionSent',
+    ],
+    //Array containing the plugins that you want to enable.
+  });
+}
+module.exports = function transformer(content, lang) {
+  let imports = [];
+  const inputAst = parser(content);
+  //we transform our input to AST
+  traverse(inputAst, {
+    //Here, our path.node is an array
+    ArrayExpression: function(path) {
+      const node = path.node;
+      const firstItem = node.elements[0];
+      //tagName
+      const secondItem = node.elements[1];
+      //attributes or child element
+      let renderReturn;
+      if (firstItem &&
+        firstItem.type === 'StringLiteral' &&
+        firstItem.value === 'pre' &&
+        secondItem.properties[0].value.value === lang) {
+        let codeNode = node.elements[2].elements[1];
+        let code = codeNode.value;
+        //得到代码的内容了，也就是demo的代码内容
+        const codeAst = parser(code);
+        //继续解析代码内容~~~
+        traverse(codeAst, {
+          ImportDeclaration: function(importPath) {
+            imports.push(importPath.node);
+            importPath.remove();
+          },
+          CallExpression: function(CallPath) {
+            const CallPathNode = CallPath.node;
+            if (CallPathNode.callee &&
+              CallPathNode.callee.object &&
+              CallPathNode.callee.object.name === 'ReactDOM' &&
+              CallPathNode.callee.property &&
+              CallPathNode.callee.property.name === 'render') {
+              //we focus on ReactDOM.render method
+              renderReturn = types.returnStatement(
+                CallPathNode.arguments[0]
+              );
+              //we focus on first parameter of ReactDOM.render method
+              CallPath.remove();
+            }
+          },
+        });
+        const astProgramBody = codeAst.program.body;
+        //program.body are updated through previous manipulation
+        const codeBlock = types.BlockStatement(astProgramBody);
+        // ReactDOM.render always at the last of preview method
+        if (renderReturn) {
+          astProgramBody.push(renderReturn);
+        }
+        const coceFunction = types.functionExpression(
+          types.Identifier('jsonmlReactLoader'),
+          //here is an Identifier of function
+          [],
+          codeBlock
+        );
+        path.replaceWith(coceFunction);
+      }
+    },
+    //End of Array Expression
+  });
+  return {
+    imports: imports,
+    inputAst: inputAst,
+  };
+};
+```
+通过上面的分析，这里已经很好理解了，如果你对这里的babylon有疑问，你可以[查看这里](https://github.com/liangklfangl/babylon)。正如官网所说的:
+<pre>
+babylon.parse(code, [options])
+babylon.parseExpression(code, [options])
 
-
-
+parse() parses the provided code as an entire ECMAScript program, while parseExpression() tries to parse a single Expression with performance in mind. When in doubt, use .parse().
+</pre>
+baylon将输入的代码作为ECMAScript程序来解析，所以我们的源代码通过这个loader就会变成如下形式(`会有一个函数而非函数字符串出现`),进而提供给babel-loader进一步处理~~:
+```js
+const React =  require('react');
+const ReactDOM = require('react-dom');
+import { Button } from 'antd';
+module.exports = {
+  "content": ["article", ["h3", "1.mark-twain解析出来的无法解析成为ast"], function jsonmlReactLoader() {
+    return <div>
+    <Button type="primary" shape="circle" icon="search" />
+    <Button type="primary" icon="search">Search</Button>
+    <Button shape="circle" icon="search" />
+    <Button icon="search">Search</Button>
+    <br />
+    <Button type="ghost" shape="circle" icon="search" />
+    <Button type="ghost" icon="search">Search</Button>
+    <Button type="dashed" shape="circle" icon="search" />
+    <Button type="dashed" icon="search">Search</Button>
+  </div>;
+  }],
+  "meta": {}
+};
+```
 今天就写到这里，以后遇到了这类问题也会及时更新中。。。。。
 
 
