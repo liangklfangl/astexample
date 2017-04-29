@@ -28,6 +28,7 @@
   "dependencies": {
     "assert": "^1.4.1",
     "babel-plugin-add-module-exports": "^0.1.4",
+    "nunjucks": "^3.0.0",
     "react": "^15.5.4"
   }
 }

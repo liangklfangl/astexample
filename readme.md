@@ -1,4 +1,5 @@
-####babel-plugin-add-module-export的plugin
+#### babel-plugin-add-module-export的plugin
+下面展示的是如何写一个babel插件
 ```js
 module.exports = ({types}) => ({
   visitor: {
@@ -76,7 +77,7 @@ export{ foo as default };
 
 总之：该插件只会处理`export default/export{ foo as default }`这种类型，将它处理为`module.exports=exports.default`，而像如`export { foo, awesome, bar };`  这种类型是不会处理的,他会`原样保存到源码中`!
 
-####下面是babel-plugin-import的plugin源码
+#### 下面是babel-plugin-import的plugin源码
 ```js
 import assert from 'assert';
 import Plugin from './Plugin';
@@ -154,7 +155,6 @@ export default function ({ types }) {
       applyInstance(method, arguments, ret.visitor);
     };
   }
-
   return ret;
 }
 ```
@@ -307,6 +307,219 @@ export default function ({ messages }) {
   };
 }
 ```
+#### 如何将一段代码转化为一个函数返回
+下面我们给出要转化的代码:
+```js
+const code = `
+import { Button, Icon } from 'antd';
+const ButtonGroup = Button.Group;
+ReactDOM.render(
+  <div>
+    <h4>Basic</h4>
+    <ButtonGroup>
+      <Button>Cancel</Button>
+      <Button type="primary">OK</Button>
+    </ButtonGroup>
+    <ButtonGroup>
+      <Button disabled>L</Button>
+      <Button disabled>M</Button>
+      <Button disabled>R</Button>
+    </ButtonGroup>
+    <ButtonGroup>
+      <Button type="primary">L</Button>
+      <Button>M</Button>
+      <Button type="ghost">M</Button>
+      <Button type="dashed">R</Button>
+    <\/ButtonGroup>
+    <h4>With Icon<\/h4>
+    <ButtonGroup>
+      <Button type="primary">
+        <Icon type="left" \/>Go back
+      <\/Button>
+      <Button type="primary">
+        Go forward<Icon type="right" \/>
+      <\/Button>
+    <\/ButtonGroup>
+    <ButtonGroup>
+      <Button type="primary" icon="cloud" \/>
+      <Button type="primary" icon="cloud-download" \/>
+    <\/ButtonGroup>
+  <\/div>,
+  mountNode
+);`
+```
+我们要转化为的内容为如下形式:
+```js
+function preview(){
+ return{
+ }
+}
+```
+我们先通过AST查看器(参考资料有链接)查看结构。如下图：
+
+![](./body.PNG)
+
+所以代码就很容易写了：
+```js
+'use strict';
+const babel = require('babel-core');
+const types = require('babel-types');
+const traverse = require('babel-traverse').default;
+const generator = require('babel-generator').default;
+const errorBoxStyle = {
+  padding: 10,
+  background: 'rgb(204, 0, 0)',
+  color: 'white',
+  fontFamily: 'sans-serif',
+  fontSize: '16px',
+  fontWeight: 'bold',
+  overflow: 'auto',
+};
+//var ReactDOM = require('react-dom')
+//要转化为什么，我们可以先通过AST查看器查看然后编写~~
+function requireGenerator(varName, moduleName) {
+  return types.variableDeclaration('var', [
+    types.variableDeclarator(
+      //t.variableDeclarator(id, init)
+      //id就是identifier
+      //此处的init必须是一个Expression
+      types.identifier(varName),
+      //t.callExpression(callee, arguments)
+      types.callExpression(
+        types.identifier('require'),
+        [types.stringLiteral(moduleName)]
+      )
+    ),
+  ]);
+}
+const defaultBabelConfig = {
+  presets: ['es2015-ie', 'react', 'stage-0'],
+};
+module.exports = function transformer(
+  code,
+  babelConfig = {},
+  noreact
+) {
+  let codeAst = null;
+  try {
+    const { ast } = babel.transform(code, Object.assign({}, defaultBabelConfig, babelConfig));
+    codeAst = ast;
+   //使用babel.transform转化为AST树
+  } catch(e) {
+    console.error(e);
+    return `function() { ` +
+      `  var React = require('react');` +
+      `  return React.createElement('pre', {` +
+      `    style: ${JSON.stringify(errorBoxStyle)}` +
+      `  }, '${e.toString()}'); ` +
+      `}`;
+  }
+  let renderReturn = null;
+  traverse(codeAst, {
+    CallExpression: function(callPath) {
+      const callPathNode = callPath.node;
+      if (callPathNode.callee &&
+          callPathNode.callee.object &&
+          callPathNode.callee.object.name === 'ReactDOM' &&
+          callPathNode.callee.property &&
+          callPathNode.callee.property.name === 'render') {
+         renderReturn = types.returnStatement(
+          callPathNode.arguments[0]
+         );
+        //将ReactDOM.render方法的第一个参数作为return返回
+        //上面已经经过babel.transform转化了~~
+        callPath.remove();
+      }
+    },
+  });
+  const astProgramBody = codeAst.program.body;
+  //引入对react与ReactDOM的引入
+  if (!noreact) {
+    astProgramBody.unshift(requireGenerator('ReactDOM', 'react-dom'));
+    astProgramBody.unshift(requireGenerator('React', 'react'));
+  }
+  // ReactDOM.render always at the last of preview method
+  if (renderReturn) {
+    astProgramBody.push(renderReturn);
+  }
+  const codeBlock = types.BlockStatement(astProgramBody);
+  //将astProgramBody转化为BlockStatement
+  //t.functionDeclaration(id, params, body, generator, async)
+  const previewFunction = types.functionDeclaration(
+    types.Identifier('functionName'),
+    [],
+    codeBlock
+  );
+  //t.program(body, directives)
+  //body: Array<Statement> (required)
+  // directives: Array<Directive> (default: [])
+  return generator(types.program([previewFunction]), null, code).code;
+};
+```
+第一步：参考上图，首先构造FunctionDeclaration.body.body，其很显然是一个returnStatement
+```js
+ renderReturn = types.returnStatement(
+          callPathNode.arguments[0]
+    );
+```
+第二步:构建BlockStament(签名为:t.blockStatement(body, directives))
+```js
+  const codeBlock = types.BlockStatement(astProgramBody);
+  //第一个参数就是BlockStatement的body，而body我们设置为returnStatement
+```
+所以此时我们构建了下面的AST结构了(也就是BlockStatement的body是一个returnStatement):
+
+![](./bs.PNG)
+
+第三步：我们构建functionDeclaration(签名为:t.functionDeclaration(id, params, body, generator, async))
+```js
+const previewFunction = types.functionDeclaration(
+    types.Identifier('preview'),
+    [],
+    codeBlock
+    //第三个参数是body
+  );
+```
+此时我们构建了一个functionDeclaration的body是我们上面构建的BlockStament。而且第一个参数是Identifier，所以此时我们就变成了下面的结果了:
+
+![](./func.PNG)
+
+也就是说,得到的结果为:"functionDeclaration的Identifier为preview,body是一个BlockStament，这个BlockStament的body是一个returnStatement"。这样的结果和将下面的代码转化为AST得到的结果是相同的:
+```js
+function preview(){
+ return{
+ }
+}
+```
+到这里我们就已经把上面的那部分代码转化为函数了。下面我们再分析一下下面的这个函数:
+```js
+function requireGenerator(varName, moduleName) {
+  return types.variableDeclaration('var', [
+    types.variableDeclarator(
+      //t.variableDeclarator(id, init)
+      //id就是identifier
+      //此处的init必须是一个Expression
+      types.identifier(varName),
+      //t.callExpression(callee, arguments)
+      types.callExpression(
+        types.identifier('require'),
+        [types.stringLiteral(moduleName)]
+      )
+    ),
+  ]);
+}
+```
+其实这里的写法是很简单的，你只要将"var ReactDOM = require("react-dom")"放到AST查看器中就可以轻而易举的写出来~
+
+注意：通过上面的处理，我们最后得到的`依然是string类型`，可以通过babel官方转换过程看到:
+<pre>
+  input string -> babylon parser -> AST -> transformer[s] -> AST -> babel-generator -> output string
+</pre>
+通过babel-generator我们最后得到依然是string，只是最后我们还需要通过babel处理来真正转化为代码~~
+
+
+
+
 今天就写到这里，以后遇到了这类问题也会及时更新中。。。。。
 
 
@@ -326,3 +539,5 @@ export default function ({ messages }) {
 [babel-plugin-add-module-export](https://github.com/liangklfang/babel-plugin-add-module-exports/blob/master/src/index.js)
 
 [ ES6学习——模块化：import和export](http://blog.csdn.net/kittyjie/article/details/50642558)
+
+[babel-types](https://github.com/babel/babel/tree/7.0/packages/babel-types)
