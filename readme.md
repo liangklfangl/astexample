@@ -458,12 +458,14 @@ module.exports = function transformer(
 };
 ```
 第一步：参考上图，首先构造FunctionDeclaration.body.body，其很显然是一个returnStatement
+
 ```js
  renderReturn = types.returnStatement(
           callPathNode.arguments[0]
     );
 ```
 第二步:构建BlockStament(签名为:t.blockStatement(body, directives))
+
 ```js
   const codeBlock = types.BlockStatement(astProgramBody);
   //第一个参数就是BlockStatement的body，而body我们设置为returnStatement
@@ -473,6 +475,7 @@ module.exports = function transformer(
 ![](./bs.PNG)
 
 第三步：我们构建functionDeclaration(签名为:t.functionDeclaration(id, params, body, generator, async))
+
 ```js
 const previewFunction = types.functionDeclaration(
     types.Identifier('preview'),
@@ -486,6 +489,7 @@ const previewFunction = types.functionDeclaration(
 ![](./func.PNG)
 
 也就是说,得到的结果为:"functionDeclaration的Identifier为preview,body是一个BlockStament，这个BlockStament的body是一个returnStatement"。这样的结果和将下面的代码转化为AST得到的结果是相同的:
+
 ```js
 function preview(){
  return{
@@ -493,6 +497,7 @@ function preview(){
 }
 ```
 到这里我们就已经把上面的那部分代码转化为函数了。下面我们再分析一下下面的这个函数:
+
 ```js
 function requireGenerator(varName, moduleName) {
   return types.variableDeclaration('var', [
@@ -520,6 +525,7 @@ function requireGenerator(varName, moduleName) {
 
 ##### 4.2结合webpack的loader操作AST得到真正的函数封装到对象上
 下面是个webpack的loader内容:
+
 ```js
 'use strict';
 const loaderUtils = require('loader-utils');
@@ -652,6 +658,7 @@ module.exports = function transformer(content, lang) {
 };
 ```
 通过上面的分析，这里已经很好理解了，如果你对这里的babylon有疑问，你可以[查看这里](https://github.com/liangklfangl/babylon)。正如官网所说的:
+
 <pre>
 babylon.parse(code, [options])
 babylon.parseExpression(code, [options])
@@ -659,6 +666,7 @@ babylon.parseExpression(code, [options])
 parse() parses the provided code as an entire ECMAScript program, while parseExpression() tries to parse a single Expression with performance in mind. When in doubt, use .parse().
 </pre>
 baylon将输入的代码作为ECMAScript程序来解析，所以我们的源代码通过这个loader就会变成如下形式(`会有一个函数而非函数字符串出现`),进而提供给babel-loader进一步处理~~:
+
 ```js
 const React =  require('react');
 const ReactDOM = require('react-dom');
@@ -701,3 +709,5 @@ module.exports = {
 [ ES6学习——模块化：import和export](http://blog.csdn.net/kittyjie/article/details/50642558)
 
 [babel-types](https://github.com/babel/babel/tree/7.0/packages/babel-types)
+
+[babel经典手册](https://github.com/thejameskyle/babel-handbook/blob/master/translations/zh-Hans/plugin-handbook.md)

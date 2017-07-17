@@ -135,7 +135,7 @@ export default class Plugin {
     const { name, object, property } = node.callee;
     //object是ReactDOM，property是render
     const types = this.types;
-    
+
     if (types.isIdentifier(node.callee)) {
       if (this.specified[name]) {
         node.callee = this.importMethod(this.specified[name], file, opts);
